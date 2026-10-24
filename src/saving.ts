@@ -101,6 +101,7 @@ export class SaveSession {
       await this.persist().catch(() => {});
       const canvas = await api<Canvas>(`/canvases/${this.id}`, { method: 'PUT', body: JSON.stringify({ revision: this.revision, scene, title }), signal: AbortSignal.timeout(15000) });
       this.revision = canvas.revision; this.savedVersion = version; this.firstDirty = 0;
+      window.dispatchEvent(new Event('homescribble:canvas-saved'));
       if (this.version === version) {
         this.localQueue = this.localQueue.catch(() => {}).then(() => writeDraft(null, this.key));
         await this.localQueue;

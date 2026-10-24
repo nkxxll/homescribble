@@ -17,6 +17,8 @@ Create a project from the dashboard to group related canvases. Open it to view i
 
 Search finds projects and individual canvases by title across the entire workspace, including from a project page. Projects have dedicated `/project/:id` URLs. See [ADR 0001](docs/adr/0001-projects-and-canvas-search.md) for the storage, search, and deletion decisions.
 
+Canvas cards show previews of the entire drawing, including embedded images and the canvas background. The browser renders missing thumbnails as cards approach the screen (two at a time), then caches the image in SQLite. Existing canvases gain previews automatically when you browse them. Drawing and background changes, including MCP edits, invalidate the cache; renaming, project moves, and zoom/pan changes retain it. Refreshing the dashboard or returning to the tab picks up external edits. Cached previews are included in database backups and can be regenerated from the saved scene. A failed preview does not prevent opening the canvas. See [ADR 0003](docs/adr/0003-canvas-thumbnails.md) for the cache and rendering design.
+
 ## MCP setup
 
 Homescribble exposes a local Streamable HTTP MCP endpoint at:

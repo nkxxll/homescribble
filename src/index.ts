@@ -5,6 +5,7 @@ import { CanvasEventHub } from './events';
 import { createMcpEndpoint } from './mcp';
 import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { thumbnailResponse } from './thumbnail-api';
 const store = openStore(process.env.DATABASE_PATH || 'data/homescribble.sqlite');
 const canvasEvents = new CanvasEventHub();
 const canvases = new CanvasService(store, canvasEvents);
@@ -67,6 +68,10 @@ const server = Bun.serve({
       if (!id && req.method === 'GET') return json(canvases.list());
       if (!id && req.method === 'POST') { const body = await req.json(); return json(canvases.create(body.title, body.scene, body.projectId), 201); }
       if (!id) return json({ error: 'Method not allowed' }, 405);
+      if (parts[4] === 'thumbnail') {
+        if (parts.length !== 5) return json({ error: 'Not found' }, 404);
+        return thumbnailResponse(req, id, store);
+      }
       if (req.method === 'GET' && parts[4] === 'events') {
         try { canvases.get(id); } catch (error) { if (error instanceof CanvasNotFoundError) return json({ error: error.message }, 404); throw error; }
         let unsubscribe = () => {};

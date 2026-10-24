@@ -77,6 +77,6 @@ test('version one databases migrate without losing drawings and projects persist
   try {
     expect(reopened.get('legacy')?.projectId).toBe(project.id);
     expect(reopened.getProject(project.id)?.canvasCount).toBe(1);
-    expect(reopened.db.query('SELECT version FROM migrations').all()).toHaveLength(2);
+    expect(reopened.db.query('SELECT version FROM migrations').all()).toHaveLength(3);
   } finally { reopened.db.close(); rmSync(dir, { recursive: true }); }
 });

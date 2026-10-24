@@ -1,7 +1,7 @@
 export type Scene = { elements: any[]; appState: Record<string, any>; files: Record<string, any> };
 export type Canvas = { id: string; title: string; projectId: string | null; revision: number; updatedAt: string; scene: Scene };
 export type Project = { id: string; title: string; updatedAt: string; canvasCount: number };
-export type Summary = Omit<Canvas, 'scene'>;
+export type Summary = Omit<Canvas, 'scene'> & { thumbnailRevision: number | null };
 export const emptyScene = (): Scene => ({ elements: [], appState: { viewBackgroundColor: '#ffffff' }, files: {} });
 const settings = ['viewBackgroundColor', 'scrollX', 'scrollY', 'zoom', 'gridSize', 'gridModeEnabled', 'theme', 'currentItemStrokeColor', 'currentItemBackgroundColor', 'currentItemFillStyle', 'currentItemStrokeWidth', 'currentItemStrokeStyle', 'currentItemRoughness', 'currentItemOpacity', 'currentItemFontFamily', 'currentItemFontSize', 'currentItemTextAlign', 'currentItemStartArrowhead', 'currentItemEndArrowhead'];
 export function sceneFrom(elements: readonly any[], state: Record<string, any>, files: Record<string, any>): Scene {

@@ -35,6 +35,16 @@ Type checking, all store tests, the production build, and all ten browser scenar
 
 See [ADR 0001](adr/0001-projects-and-canvas-search.md) for the accepted design.
 
+## Thumbnail verification (2026-10-24)
+
+- `bun run typecheck`: passed.
+- `bun test tests`: 15 passed, 112 assertions, including thumbnail migration, invalidation through REST/MCP, stale uploads, cache retention, deletion, persistence, backup restoration, and HTTP caching/validation.
+- Production build: passed as part of Cypress setup.
+- Existing browser smoke spec: 12 passed, including autosave, recovery, navigation, projects, images, and MCP edits.
+- New thumbnail browser spec: 4 passed. It verifies drawing/text/image pixels, cache reuse without scene downloads across reload and a real server restart, MCP invalidation, a real edit racing an upload, empty and extreme aspect ratios, fallback on failure, offscreen deferral, and at most two concurrent scene downloads.
+
+The thumbnail screenshot in `cypress/screenshots/thumbnails.cy.ts/canvas-card-thumbnails.png` was visually inspected. The browser tests ran outside the sandbox using the existing temporary-database setup because Electron exits with code 134 inside the sandbox. See [ADR 0003](adr/0003-canvas-thumbnails.md) for the accepted design.
+
 ## Scope of confidence
 
 These tests cover the MVP's principal persistence and recovery contracts. They are not proof that all possible bugs are absent. Revision conflict tests simulate a second writer through the API; they do not automate two independent browser windows. The suite does not simulate power loss, a full disk, browser eviction of IndexedDB, or every browser engine. An offline test keeps the frontend server reachable while blocking scene writes; this app is not a service-worker-backed offline installation. Server snapshots run at startup and every 24 hours while the process is running; backup restoration is verified separately by reopening a serialized snapshot and comparing data.

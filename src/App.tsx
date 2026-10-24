@@ -4,6 +4,7 @@ import '@excalidraw/excalidraw/index.css';
 import { api, drafts, discardDraft, openSession, type SaveSession } from './saving';
 import { sceneFrom, type Canvas, type Summary, type Project } from './shared';
 import './index.css';
+import { CanvasPreview } from './CanvasPreview';
 
 function go(path: string) { history.pushState({}, '', path); window.dispatchEvent(new PopStateEvent('popstate')); }
 function Brand() { return <span className="brand"><span className="brand-icon">h.</span> homescribble<span className="local-tag">LOCAL</span></span>; }
@@ -27,7 +28,18 @@ function Dashboard({ projectId }: { projectId?: string }) {
     try { setRecovery(await drafts()); } catch { /* Server canvases remain available if browser storage is disabled. */ }
     setLoading(false);
   }
-  useEffect(() => { void refresh(); }, []);
+  useEffect(() => {
+    const update = () => { if (!document.hidden) void refresh(); };
+    void refresh();
+    window.addEventListener('focus', update);
+    window.addEventListener('homescribble:canvas-saved', update);
+    document.addEventListener('visibilitychange', update);
+    return () => {
+      window.removeEventListener('focus', update);
+      window.removeEventListener('homescribble:canvas-saved', update);
+      document.removeEventListener('visibilitychange', update);
+    };
+  }, []);
   async function action(fn: () => Promise<void>) { setBusy(true); try { await fn(); } catch (e: any) { setError(e.message); } finally { setBusy(false); } }
   const project = projects.find(p => p.id === projectId);
   const term = search.trim().toLowerCase();
@@ -52,7 +64,7 @@ function Dashboard({ projectId }: { projectId?: string }) {
       <h2 className="section-title">Canvases <span>{visibleCanvases.length}</span></h2>
       {loading ? <p>Opening your workspace…</p> : <div className="canvas-grid">
         {visibleCanvases.map((c, i) => <article className="canvas-card" key={c.id}>
-          <button className={`canvas-preview tint-${i % 3}`} aria-label={`Open ${c.title}`} onClick={() => go(`/canvas/${c.id}`)}><span className="paper-mark">✎</span><span className="open-label">Open canvas ↗</span></button>
+          <CanvasPreview key={`${c.id}:${c.revision}:${c.thumbnailRevision}`} canvas={c} tint={i % 3} onOpen={() => go(`/canvas/${c.id}`)} />
           <div className="card-details"><span className="canvas-kind">Canvas · {projects.find(p => p.id === c.projectId)?.title || 'No project'}</span><button className="canvas-title" onClick={() => go(`/canvas/${c.id}`)}>{c.title}</button><p>Edited {new Date(c.updatedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</p><div className="card-actions">
             <button disabled={busy} onClick={() => { const title = prompt('Canvas name', c.title); if (title) void action(async () => { await api(`/canvases/${c.id}`, { method: 'PUT', body: JSON.stringify({ title, revision: c.revision }) }); await refresh(); }); }}>Rename</button>
             <button disabled={busy} onClick={() => action(async () => { await api(`/canvases/${c.id}/duplicate`, { method: 'POST' }); await refresh(); })}>Duplicate</button>
