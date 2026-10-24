@@ -55,6 +55,7 @@ export class SaveSession {
   private timer?: ReturnType<typeof setTimeout>;
   private firstDirty = 0;
   private listeners = new Set<() => void>();
+  private remoteListeners = new Set<(scene: Scene) => void>();
   key: string;
   scene: Scene;
   title: string;
@@ -68,6 +69,7 @@ export class SaveSession {
     if (draft) { this.version = 1; void this.persist(); this.status = 'Saving'; if (canvas.revision !== draft.revision) { this.conflict = true; this.status = 'Conflict'; } else this.schedule(); }
   }
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
+  subscribeRemote = (listener: (scene: Scene) => void) => { this.remoteListeners.add(listener); return () => { this.remoteListeners.delete(listener); }; };
   emit() { this.listeners.forEach(f => f()); }
   draft(): Draft { return { key: this.key, id: this.id, scene: this.scene, title: this.title, revision: this.revision, version: this.version }; }
   persist() {
@@ -118,6 +120,41 @@ export class SaveSession {
     await this.localQueue.catch(() => {});
     if (this.version === version) { await writeDraft(null, this.key); this.savedVersion = version; sessions.delete(this.id); }
     return copy;
+  }
+  async receiveRemoteRevision(committedRevision?: number) {
+    if (committedRevision !== undefined && committedRevision <= this.revision) return;
+    if (committedRevision !== undefined && (this.busy || this.version !== this.savedVersion || this.conflict)) {
+      this.conflict = true; this.status = 'Conflict';
+      this.message = 'This canvas changed through MCP while you had local work. Your draft is preserved. Save it as a new canvas to keep both versions.';
+      this.emit(); return;
+    }
+    // A reconnect is only evidence that events may have been missed. Let an
+    // in-flight browser save finish before comparing authoritative revisions,
+    // otherwise its committed response could be mistaken for a remote edit.
+    if (committedRevision === undefined && this.busy) {
+      setTimeout(() => void this.receiveRemoteRevision(), 100);
+      return;
+    }
+    try {
+      const canvas = await api<Canvas>(`/canvases/${this.id}`);
+      if (canvas.revision <= this.revision) return;
+      if (this.busy && committedRevision === undefined) {
+        setTimeout(() => void this.receiveRemoteRevision(), 100);
+        return;
+      }
+      if (this.busy || this.version !== this.savedVersion) {
+        this.conflict = true; this.status = 'Conflict';
+        this.message = 'This canvas changed through MCP while you had local work. Your draft is preserved. Save it as a new canvas to keep both versions.';
+        this.emit(); return;
+      }
+      this.scene = canvas.scene; this.title = canvas.title; this.revision = canvas.revision; this.fingerprint = JSON.stringify(canvas.scene);
+      this.status = 'Saved'; this.message = '';
+      this.remoteListeners.forEach(listener => listener(canvas.scene)); this.emit();
+    } catch (error: any) {
+      if (error.status === 404) {
+        this.conflict = true; this.status = 'Conflict'; this.message = 'The server copy was deleted. Your local canvas is preserved in this tab.'; this.emit();
+      }
+    }
   }
 }
 const opening = new Map<string, Promise<SaveSession>>();

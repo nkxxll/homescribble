@@ -9,6 +9,12 @@ function draw() {
 function create(name = 'Smoke canvas') {
   return cy.request('POST', '/api/canvases', { title: name }).then(r => r.body.id as string);
 }
+function mcpAdd(canvasId: string) {
+  return cy.request(`/api/canvases/${canvasId}`).then(canvas => cy.request({
+    method: 'POST', url: '/mcp', headers: { Accept: 'application/json, text/event-stream' },
+    body: { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'add_elements', arguments: { canvasId, expectedRevision: canvas.body.revision, elements: [{ id: 'mcp-box', type: 'rectangle', x: 100, y: 100, width: 200, height: 120 }] } } },
+  })).its('status').should('eq', 200);
+}
 describe('Homescribble browser smoke tests', () => {
   beforeEach(() => {
     cy.request('/api/canvases').then(r => { for (const c of r.body) cy.request('DELETE', `/api/canvases/${c.id}`); });
@@ -124,6 +130,31 @@ describe('Homescribble browser smoke tests', () => {
       cy.contains('Save draft as new canvas').click(); saved();
       title().should('have.value', 'My local version (recovered)');
       cy.request(`/api/canvases/${id}`).its('body.title').should('eq', 'Other tab version');
+    });
+  });
+  it('adopts an MCP revision in a clean open editor without reloading', () => {
+    create('Live MCP').then(id => {
+      cy.visit(`/canvas/${id}`); cy.wait(500); saved();
+      cy.get('[data-testid="element-count"]').should('have.text', '0');
+      mcpAdd(id);
+      cy.get('[data-testid="element-count"]').should('have.text', '1');
+      saved();
+    });
+  });
+  it('preserves dirty browser work as a conflict when MCP commits', () => {
+    create('Dirty MCP').then(id => {
+      cy.visit(`/canvas/${id}`); cy.wait(500); saved();
+      cy.intercept('PUT', `/api/canvases/${id}`, { statusCode: 503, body: { error: 'Hold local draft' } });
+      title().clear().type('Unsaved local title');
+      cy.get('[data-testid="save-status"]').should('contain', 'Save failed');
+      mcpAdd(id);
+      cy.get('[data-testid="save-status"]').should('contain', 'Conflict');
+      title().should('have.value', 'Unsaved local title');
+      cy.get('[data-testid="element-count"]').should('have.text', '0');
+      cy.request(`/api/canvases/${id}`).then(response => {
+        expect(response.body.title).eq('Dirty MCP');
+        expect(response.body.scene.elements).length(1);
+      });
     });
   });
   it('imports an embedded image and survives reload and a real server restart', () => {

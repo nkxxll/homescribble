@@ -1,8 +1,14 @@
 import index from './index.html';
 import { openStore } from './store';
+import { CanvasConflictError, CanvasNotFoundError, CanvasService } from './canvas-service';
+import { CanvasEventHub } from './events';
+import { createMcpEndpoint } from './mcp';
 import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 const store = openStore(process.env.DATABASE_PATH || 'data/homescribble.sqlite');
+const canvasEvents = new CanvasEventHub();
+const canvases = new CanvasService(store, canvasEvents);
+const mcp = createMcpEndpoint(canvases);
 async function backup() {
   const dir = process.env.BACKUP_DIR || 'data/backups';
   mkdirSync(dir, { recursive: true });
@@ -27,6 +33,7 @@ const server = Bun.serve({
   maxRequestBodySize: 30 * 1024 * 1024,
   development: process.env.NODE_ENV !== 'production' && { hmr: true, console: true },
   routes: {
+  '/mcp': mcp,
   '/*': frontend,
   '/fonts/*': async req => {
     const path = resolve('node_modules/@excalidraw/excalidraw/dist/prod', '.' + new URL(req.url).pathname);
@@ -57,17 +64,37 @@ const server = Bun.serve({
       }
       if (parts[2] !== 'canvases') return json({ error: 'Not found' }, 404);
       const id = parts[3];
-      if (!id && req.method === 'GET') return json(store.list());
-      if (!id && req.method === 'POST') { const body = await req.json(); return json(store.create(body.title, body.scene, body.projectId), 201); }
+      if (!id && req.method === 'GET') return json(canvases.list());
+      if (!id && req.method === 'POST') { const body = await req.json(); return json(canvases.create(body.title, body.scene, body.projectId), 201); }
       if (!id) return json({ error: 'Method not allowed' }, 405);
-      const canvas = store.get(id);
-      if (!canvas) return json({ error: 'Canvas not found' }, 404);
-      if (req.method === 'POST' && parts[4] === 'duplicate') return json(store.create(`${canvas.title.slice(0, 113)} (copy)`, canvas.scene, canvas.projectId), 201);
+      if (req.method === 'GET' && parts[4] === 'events') {
+        try { canvases.get(id); } catch (error) { if (error instanceof CanvasNotFoundError) return json({ error: error.message }, 404); throw error; }
+        let unsubscribe = () => {};
+        let heartbeat: ReturnType<typeof setInterval> | undefined;
+        const stream = new ReadableStream({
+          start(controller) {
+            const send = (value: string) => controller.enqueue(new TextEncoder().encode(value));
+            send('retry: 2000\n\n');
+            unsubscribe = canvasEvents.subscribe(id, event => send(`data: ${JSON.stringify(event)}\n\n`));
+            // Bun's default HTTP idle timeout is ten seconds, so keep the
+            // loopback stream active well inside that window.
+            heartbeat = setInterval(() => send(': keepalive\n\n'), 5_000);
+          },
+          cancel() { unsubscribe(); if (heartbeat) clearInterval(heartbeat); },
+        });
+        return new Response(stream, { headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache, no-store', Connection: 'keep-alive' } });
+      }
+      const canvas = canvases.get(id);
+      if (req.method === 'POST' && parts[4] === 'duplicate') return json(canvases.create(`${canvas.title.slice(0, 113)} (copy)`, canvas.scene, canvas.projectId), 201);
       if (req.method === 'GET') return json(canvas);
-      if (req.method === 'PUT') { const result = store.update(id, await req.json()); return json(result.body, result.status); }
+      if (req.method === 'PUT') { const body = await req.json(); return json(canvases.update(id, body.revision, body, 'rest')); }
       if (req.method === 'DELETE') { store.remove(id); return json({ ok: true }); }
       return json({ error: 'Method not allowed' }, 405);
-    } catch (error) { return json({ error: error instanceof Error ? error.message : 'Request failed' }, 400); }
+    } catch (error) {
+      if (error instanceof CanvasNotFoundError) return json({ error: error.message }, 404);
+      if (error instanceof CanvasConflictError) return json({ error: 'This canvas changed in another tab.', current: error.current }, 409);
+      return json({ error: error instanceof Error ? error.message : 'Request failed' }, 400);
+    }
   },
   },
 });

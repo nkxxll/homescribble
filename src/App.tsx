@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Excalidraw, MainMenu } from '@excalidraw/excalidraw';
 import '@excalidraw/excalidraw/index.css';
 import { api, drafts, discardDraft, openSession, type SaveSession } from './saving';
@@ -70,14 +70,30 @@ function Editor({ id }: { id: string }) {
   const [session, setSession] = useState<SaveSession>();
   const [error, setError] = useState('');
   const initialData = useMemo(() => session?.scene, [session]);
+  const excalidrawAPI = useRef<any>(null);
   const [, render] = useState(0);
   useEffect(() => { let active = true; let unsubscribe: (() => void) | undefined; void openSession(id).then(s => { if (active) { setSession(s); unsubscribe = s.subscribe(() => render(n => n + 1)); } }).catch(e => setError(e.message)); return () => { active = false; unsubscribe?.(); }; }, [id]);
+  useEffect(() => {
+    if (!session) return;
+    const source = new EventSource(`/api/canvases/${encodeURIComponent(id)}/events`);
+    const adopt = (scene: typeof session.scene) => {
+      excalidrawAPI.current?.addFiles(Object.values(scene.files));
+      excalidrawAPI.current?.updateScene({ elements: scene.elements, appState: scene.appState });
+    };
+    const unsubscribe = session.subscribeRemote(adopt);
+    source.onmessage = event => {
+      try { void session.receiveRemoteRevision(JSON.parse(event.data).revision); } catch { /* A reconnect fetch will recover malformed or missed events. */ }
+    };
+    source.onopen = () => void session.receiveRemoteRevision();
+    source.onerror = () => void session.receiveRemoteRevision();
+    return () => { unsubscribe(); source.close(); };
+  }, [id, session]);
   if (!session) return <div className="loading"><button onClick={() => go('/')}>← All canvases</button><p role={error ? 'alert' : undefined}>{error || 'Opening your canvas…'}</p></div>;
   return <div className="editor-shell">
-    <header className="editor-header"><button className="back-button" onClick={() => { void session.flush(); go('/'); }}>← <span>All canvases</span></button><span className="divider" /><input aria-label="Canvas title" maxLength={120} value={session.title} onChange={e => session.change(session.scene, e.target.value)} onBlur={() => { if (!session.title.trim()) session.change(session.scene, 'Untitled canvas'); }} /><span role="status" data-testid="save-status" className={`save-status status-${session.status.replace(' ', '-')}`}>{session.status === 'Saved' ? '✓ ' : '● '}{session.status}</span></header>
+    <header className="editor-header"><button className="back-button" onClick={() => { void session.flush(); go('/'); }}>← <span>All canvases</span></button><span className="divider" /><input aria-label="Canvas title" maxLength={120} value={session.title} onChange={e => session.change(session.scene, e.target.value)} onBlur={() => { if (!session.title.trim()) session.change(session.scene, 'Untitled canvas'); }} /><span role="status" data-testid="save-status" className={`save-status status-${session.status.replace(' ', '-')}`}>{session.status === 'Saved' ? '✓ ' : '● '}{session.status}</span><span hidden data-testid="element-count">{session.scene.elements.filter(element => !element.isDeleted).length}</span></header>
     {(session.message || session.status === 'Conflict') && <div className="editor-notice" role="alert">{session.message || 'This canvas changed elsewhere. Your local draft is preserved.'} {session.conflict ? <button onClick={async () => { try { const c = await session.recoverCopy(); go(`/canvas/${c.id}`); } catch (e: any) { setError(e.message); } }}>Save draft as new canvas</button> : <button onClick={() => void session.flush()}>Retry now</button>}<button onClick={() => { const url = URL.createObjectURL(new Blob([JSON.stringify({ type: 'excalidraw', version: 2, source: 'homescribble', ...session.scene })], { type: 'application/json' })); const a = document.createElement('a'); a.href = url; a.download = `${session.title}.excalidraw`; a.click(); URL.revokeObjectURL(url); }}>Download draft</button></div>}
     {error && <div role="alert">{error}</div>}
-    <div className="drawing-surface"><Excalidraw initialData={initialData} onChange={(elements, state, files) => session.change(sceneFrom(elements, state, files))}>
+    <div className="drawing-surface"><Excalidraw excalidrawAPI={api => { excalidrawAPI.current = api; }} initialData={initialData} onChange={(elements, state, files) => session.change(sceneFrom(elements, state, files))}>
       <MainMenu><MainMenu.DefaultItems.LoadScene /><MainMenu.DefaultItems.SaveToActiveFile /><MainMenu.DefaultItems.Export /><MainMenu.DefaultItems.SaveAsImage /><MainMenu.DefaultItems.ClearCanvas /><MainMenu.DefaultItems.ToggleTheme /><MainMenu.DefaultItems.ChangeCanvasBackground /></MainMenu>
     </Excalidraw></div>
   </div>;

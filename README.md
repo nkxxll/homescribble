@@ -17,6 +17,74 @@ Create a project from the dashboard to group related canvases. Open it to view i
 
 Search finds projects and individual canvases by title across the entire workspace, including from a project page. Projects have dedicated `/project/:id` URLs. See [ADR 0001](docs/adr/0001-projects-and-canvas-search.md) for the storage, search, and deletion decisions.
 
+## MCP setup
+
+Homescribble exposes a local Streamable HTTP MCP endpoint at:
+
+```text
+http://127.0.0.1:3000/mcp
+```
+
+The endpoint lets coding agents list and inspect canvases, create canvases, and perform bounded revision-checked element edits against the same SQLite data used by the browser. See [ADR 0002](docs/adr/0002-native-mcp-endpoint.md) for why the endpoint is part of Homescribble instead of a separate Excalidraw MCP process.
+
+Start Homescribble before connecting a client:
+
+```sh
+bun dev
+```
+
+Keep Homescribble bound to `127.0.0.1`. The endpoint has no authentication and must not be exposed through a public tunnel or reverse proxy.
+
+### Codex
+
+Add the endpoint with the Codex CLI:
+
+```sh
+codex mcp add homescribble --url http://127.0.0.1:3000/mcp
+codex mcp list
+```
+
+The CLI and IDE extension share MCP configuration. The equivalent `~/.codex/config.toml` entry is:
+
+```toml
+[mcp_servers.homescribble]
+url = "http://127.0.0.1:3000/mcp"
+```
+
+See the [official Codex MCP setup example](https://developers.openai.com/learn/docs-mcp).
+
+### OpenCode
+
+Add and verify the remote endpoint:
+
+```sh
+opencode mcp add homescribble --url http://127.0.0.1:3000/mcp
+opencode mcp list
+```
+
+If the installed OpenCode release uses the interactive form, run `opencode mcp add`, choose **Remote**, name it `homescribble`, and enter the same URL. No OAuth or request headers are required for the loopback server. See the [OpenCode MCP server guide](https://dev.opencode.ai/docs/mcp-servers/).
+
+### Claude Code
+
+From the project directory, add the server with Claude Code's default local scope (private to you and available in this project) and verify it:
+
+```sh
+claude mcp add --transport http homescribble http://127.0.0.1:3000/mcp
+claude mcp list
+```
+
+Inside Claude Code, run `/mcp` to inspect the connection. Add `--scope user` before the server name if the connection should be available in every project:
+
+```sh
+claude mcp add --transport http --scope user homescribble http://127.0.0.1:3000/mcp
+```
+
+This setup targets Claude Code. Claude and Claude Desktop custom web connectors are cloud-connected products and should not be pointed at, or used as a reason to publish, this unauthenticated loopback service. See [Anthropic's remote MCP guidance](https://support.anthropic.com/en/articles/11503834-building-custom-integrations-via-remote-mcp-servers).
+
+### Connection check
+
+With Homescribble running, ask the client to list the tools from `homescribble`, then list available canvases. If discovery fails, confirm that the application health check succeeds at `http://127.0.0.1:3000/api/health`, the MCP URL ends in `/mcp`, and the client is running on the same machine.
+
 ## Production
 
 ```sh
@@ -60,4 +128,4 @@ bun run build
 bun run test:smoke
 ```
 
-Cypress builds the frontend and starts a production server on port 3101 with its own temporary database, cleans it up afterward, and runs actual drawing and dashboard interactions plus recovery, retry, revision-conflict, navigation, and delayed-request checks. Screenshots are saved under `cypress/screenshots`. Backend tests exercise database reopening, atomic validation, stale revisions, and backup restoration. No test suite proves the absence of all bugs; these checks cover the specified MVP persistence paths.
+Cypress builds the frontend and starts a production server on port 3101 with its own temporary database, cleans it up afterward, and runs actual drawing and dashboard interactions plus recovery, retry, revision-conflict, MCP invalidation, navigation, and delayed-request checks. Screenshots are saved under `cypress/screenshots`. Backend tests exercise database reopening, atomic validation, MCP negotiation and tools, scene invariants, stale revisions, and backup restoration. No test suite proves the absence of all bugs; these checks cover the specified persistence paths.

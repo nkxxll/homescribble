@@ -1,7 +1,7 @@
 import { Database } from 'bun:sqlite';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { emptyScene, validTitle, validateScene, type Canvas, type Project, type Summary } from './shared';
+import { emptyScene, validTitle, validateScene, type Canvas, type Project, type Scene, type Summary } from './shared';
 export function openStore(path: string) {
   mkdirSync(dirname(path), { recursive: true });
   const db = new Database(path, { create: true });
@@ -35,7 +35,26 @@ export function openStore(path: string) {
     db.query('INSERT INTO canvases (id,title,revision,updatedAt,scene,projectId) VALUES (?, ?, 0, ?, ?, ?)').run(id, validTitle(title), new Date().toISOString(), JSON.stringify(validateScene(scene)), validProject(projectId));
     return get(id)!;
   };
-  return { db, get, create, list, getProject, listProjects,
+  const update = db.transaction((id: string, body: any) => {
+    const current = get(id);
+    if (!current) return { status: 404 as const, body: { error: 'Canvas not found' } };
+    if (!Number.isInteger(body.revision)) throw new Error('Revision required');
+    if (current.revision !== body.revision) return { status: 409 as const, body: { error: 'This canvas changed in another tab.', current } };
+    const title = body.title === undefined ? current.title : validTitle(body.title);
+    const scene = body.scene === undefined ? current.scene : validateScene(body.scene);
+    const projectId = body.projectId === undefined ? current.projectId : validProject(body.projectId);
+    db.query('UPDATE canvases SET title=?,scene=?,projectId=?,revision=revision+1,updatedAt=? WHERE id=?').run(title, JSON.stringify(scene), projectId, new Date().toISOString(), id);
+    return { status: 200 as const, body: get(id)! };
+  });
+  const mutate = db.transaction((id: string, expectedRevision: number, mutation: (scene: Scene) => unknown) => {
+    const current = get(id);
+    if (!current) return { status: 404 as const, body: { error: 'Canvas not found' } };
+    if (current.revision !== expectedRevision) return { status: 409 as const, body: { error: 'This canvas changed in another tab.', current } };
+    const scene = validateScene(mutation(current.scene));
+    db.query('UPDATE canvases SET scene=?,revision=revision+1,updatedAt=? WHERE id=?').run(JSON.stringify(scene), new Date().toISOString(), id);
+    return { status: 200 as const, body: get(id)! };
+  });
+  return { db, get, create, list, getProject, listProjects, update, mutate,
     createProject: (title: unknown) => {
       const id = crypto.randomUUID();
       db.query('INSERT INTO projects VALUES (?, ?, ?)').run(id, validTitle(title), new Date().toISOString());
@@ -51,17 +70,6 @@ export function openStore(path: string) {
       const term = query.trim().toLowerCase();
       return { projects: listProjects().filter(p => p.title.toLowerCase().includes(term)), canvases: list().filter(c => c.title.toLowerCase().includes(term)) };
     },
-    update: db.transaction((id: string, body: any) => {
-      const current = get(id);
-      if (!current) return { status: 404, body: { error: 'Canvas not found' } };
-      if (!Number.isInteger(body.revision)) throw new Error('Revision required');
-      if (current.revision !== body.revision) return { status: 409, body: { error: 'This canvas changed in another tab.', current } };
-      const title = body.title === undefined ? current.title : validTitle(body.title);
-      const scene = body.scene === undefined ? current.scene : validateScene(body.scene);
-      const projectId = body.projectId === undefined ? current.projectId : validProject(body.projectId);
-      db.query('UPDATE canvases SET title=?,scene=?,projectId=?,revision=revision+1,updatedAt=? WHERE id=?').run(title, JSON.stringify(scene), projectId, new Date().toISOString(), id);
-      return { status: 200, body: get(id) };
-    }),
     remove: (id: string) => db.query('DELETE FROM canvases WHERE id=?').run(id),
   };
 }
