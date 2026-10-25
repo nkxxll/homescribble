@@ -1,4 +1,5 @@
 import type { Canvas, Scene } from './shared';
+import { normalizeSceneDimensions } from './scene-dimensions';
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch('/api' + path, { ...init, headers: { 'Content-Type': 'application/json', ...init?.headers } });
   const body = await response.json();
@@ -86,6 +87,17 @@ export class SaveSession {
     if (!this.conflict) { this.status = navigator.onLine ? 'Saving' : 'Offline'; this.schedule(); }
     this.emit();
   }
+  async prepareDimensions() {
+    // A cached session may still be saving or receiving edits while fonts load.
+    // Only replace the exact snapshot we measured; otherwise measure again.
+    for (;;) {
+      const scene = this.scene, version = this.version, revision = this.revision;
+      const normalized = await normalizeSceneDimensions(scene);
+      if (this.scene !== scene || this.version !== version || this.revision !== revision) continue;
+      this.change(normalized);
+      return;
+    }
+  }
   schedule(delay?: number) {
     this.firstDirty ||= Date.now();
     clearTimeout(this.timer);
@@ -124,33 +136,35 @@ export class SaveSession {
   }
   async receiveRemoteRevision(committedRevision?: number) {
     if (committedRevision !== undefined && committedRevision <= this.revision) return;
-    if (committedRevision !== undefined && (this.busy || this.version !== this.savedVersion || this.conflict)) {
+    if (this.busy) {
+      // SSE can report our own commit before the PUT response updates revision.
+      setTimeout(() => void this.receiveRemoteRevision(committedRevision), 100);
+      return;
+    }
+    if (committedRevision !== undefined && (this.version !== this.savedVersion || this.conflict)) {
       this.conflict = true; this.status = 'Conflict';
       this.message = 'This canvas changed through MCP while you had local work. Your draft is preserved. Save it as a new canvas to keep both versions.';
       this.emit(); return;
     }
-    // A reconnect is only evidence that events may have been missed. Let an
-    // in-flight browser save finish before comparing authoritative revisions,
-    // otherwise its committed response could be mistaken for a remote edit.
-    if (committedRevision === undefined && this.busy) {
-      setTimeout(() => void this.receiveRemoteRevision(), 100);
-      return;
-    }
     try {
       const canvas = await api<Canvas>(`/canvases/${this.id}`);
+      if (canvas.revision <= this.revision) return;
+      const scene = await normalizeSceneDimensions(canvas.scene);
       if (canvas.revision <= this.revision) return;
       if (this.busy && committedRevision === undefined) {
         setTimeout(() => void this.receiveRemoteRevision(), 100);
         return;
       }
-      if (this.busy || this.version !== this.savedVersion) {
+      if (this.busy || this.version !== this.savedVersion || this.conflict) {
         this.conflict = true; this.status = 'Conflict';
         this.message = 'This canvas changed through MCP while you had local work. Your draft is preserved. Save it as a new canvas to keep both versions.';
         this.emit(); return;
       }
       this.scene = canvas.scene; this.title = canvas.title; this.revision = canvas.revision; this.fingerprint = JSON.stringify(canvas.scene);
       this.status = 'Saved'; this.message = '';
-      this.remoteListeners.forEach(listener => listener(canvas.scene)); this.emit();
+      // Persist dimension repairs through the same revision-safe draft/save path.
+      this.change(scene);
+      this.remoteListeners.forEach(listener => listener(this.scene)); this.emit();
     } catch (error: any) {
       if (error.status === 404) {
         this.conflict = true; this.status = 'Conflict'; this.message = 'The server copy was deleted. Your local canvas is preserved in this tab.'; this.emit();
@@ -169,7 +183,7 @@ export function openSession(id: string): Promise<SaveSession> {
 async function loadSession(id: string) {
   await tabReady;
   const existing = sessions.get(id);
-  if (existing && existing.version !== existing.savedVersion) return existing;
+  if (existing && existing.version !== existing.savedVersion) { await existing.prepareDimensions(); return existing; }
   const local = (await drafts().catch(() => [] as Draft[])).filter(d => d.id === id);
   const recoveryKey = new URLSearchParams(location.search).get('recover');
   const draft = local.find(d => d.key === `${tabId}:${id}`) || local.find(d => d.key === recoveryKey);
@@ -179,7 +193,9 @@ async function loadSession(id: string) {
     if (!draft) throw error;
     canvas = { id, projectId: null, title: draft.title, scene: draft.scene, revision: error.status === 404 ? -1 : draft.revision, updatedAt: '' };
   }
-  const session = new SaveSession(id, canvas, draft); sessions.set(id, session); return session;
+  const session = new SaveSession(id, canvas, draft);
+  await session.prepareDimensions();
+  sessions.set(id, session); return session;
 }
 window.addEventListener('online', () => sessions.forEach(s => void s.flush()));
 window.addEventListener('beforeunload', event => {

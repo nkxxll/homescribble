@@ -76,6 +76,15 @@ function common(input: ElementInput, type: string) {
   return element;
 }
 
+// Server fallback only: exact font metrics and wrapping are repaired in the browser.
+function estimateTextDimensions(text: string, fontSize: number, lineHeight: number) {
+  const lines = text.replace(/\r\n?/g, '\n').split('\n');
+  return {
+    width: Math.max(1, Math.min(100_000, Math.max(...lines.map(line => Array.from(line).length)) * fontSize * 0.6)),
+    height: Math.max(1, Math.min(100_000, lines.length * fontSize * lineHeight)),
+  };
+}
+
 function normalize(input: ElementInput) {
   if (!input || typeof input !== 'object' || !TYPES.has(input.type)) fail(`Unsupported element type: ${String(input?.type)}`);
   const element = common(input, input.type);
@@ -89,8 +98,9 @@ function normalize(input: ElementInput) {
     element.text = text; element.originalText = text; element.fontSize = fontSize; element.fontFamily = input.fontFamily ?? 1;
     element.textAlign = input.textAlign ?? 'left'; element.verticalAlign = input.verticalAlign ?? 'top'; element.lineHeight = input.lineHeight ?? 1.25;
     element.containerId = input.containerId == null ? null : id(input.containerId, 'containerId'); element.autoResize = input.autoResize ?? true;
-    element.width = input.width === undefined ? Math.max(1, Math.min(100_000, text.length * fontSize * 0.6)) : positive(input.width, 'width');
-    element.height = input.height === undefined ? fontSize * 1.25 : positive(input.height, 'height');
+    const estimate = estimateTextDimensions(text, fontSize, positive(element.lineHeight, 'lineHeight'));
+    element.width = input.width === undefined ? estimate.width : positive(input.width, 'width');
+    element.height = input.height === undefined ? estimate.height : positive(input.height, 'height');
   } else {
     const normalizedPoints = points(input.points, 'points');
     element.points = normalizedPoints;
@@ -191,6 +201,11 @@ export function updateElements(scene: Scene, patches: ElementPatch[]): Scene {
       else element[key] = clone(value);
     }
     if ('text' in item.patch && !('originalText' in item.patch)) element.originalText = element.text;
+    if (element.type === 'text' && ['text', 'fontSize', 'fontFamily', 'lineHeight'].some(key => key in item.patch)) {
+      const estimate = estimateTextDimensions(element.text, positive(element.fontSize, 'fontSize'), positive(element.lineHeight, 'lineHeight'));
+      if (!('width' in item.patch) && element.autoResize && !element.containerId) element.width = estimate.width;
+      if (!('height' in item.patch)) element.height = estimate.height;
+    }
     bump(element);
   }
   return finish(scene, elements, seen);

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { exportToBlob, getNonDeletedElements } from '@excalidraw/excalidraw';
 import { api } from './saving';
+import { normalizeSceneDimensions } from './scene-dimensions';
 import type { Canvas, Summary } from './shared';
 
 // Include fetching and uploading in the limit, so a large library cannot
@@ -32,8 +33,10 @@ async function generateThumbnail(id: string, signal: AbortSignal): Promise<strin
   for (let attempt = 0; attempt < 2; attempt++) {
     signal.throwIfAborted();
     const canvas = await api<Canvas>(`/canvases/${encodeURIComponent(id)}`, { signal: AbortSignal.any([signal, AbortSignal.timeout(15000)]) });
+    const scene = await normalizeSceneDimensions(canvas.scene);
+    signal.throwIfAborted();
     const blob = await exportToBlob({
-      elements: getNonDeletedElements(canvas.scene.elements),
+      elements: getNonDeletedElements(scene.elements),
       appState: { viewBackgroundColor: canvas.scene.appState.viewBackgroundColor || '#ffffff', exportBackground: true, exportWithDarkMode: false, exportEmbedScene: false },
       files: canvas.scene.files,
       getDimensions: (width: number, height: number) => {
